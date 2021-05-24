@@ -2,6 +2,8 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [0.2.1](https://github.com/maidsafe/qjsonrpc/compare/v0.2.0...v0.2.1) (2021-05-24)
+
 ### [0.26.0](https://github.com/maidsafe/sn_api/compare/v0.25.3...v0.26.0) (2021-05-06)
 
 * ***api*** update sn_client to 0.54.9
