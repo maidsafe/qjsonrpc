@@ -8,10 +8,8 @@ name: PR
 on: pull_request
 
 env:
-  # Run all cargo commands with --verbose.
   CARGO_TERM_VERBOSE: true
   RUST_BACKTRACE: 1
-  # Deny all compiler warnings.
   RUSTFLAGS: "-D warnings"
 
 jobs:
@@ -21,7 +19,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      # Install Rust and required components
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -29,7 +26,6 @@ jobs:
           override: true
           components: rustfmt, clippy
 
-      # Cache.
       - name: Cargo cache registry, index and build
         uses: actions/cache@v2.1.4
         with:
@@ -39,11 +35,9 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-cache-${{ hashFiles('**/Cargo.lock') }}
 
-      # Check if the code is formatted correctly.
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      # Run Clippy.
       - name: Clippy checks
         run: cargo clippy --all-targets
 
@@ -67,14 +61,12 @@ jobs:
       PROPTEST_CASES: 1
     steps:
       - uses: actions/checkout@v2
-      # Install Rust
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           toolchain: stable
           override: true
 
-      # Cache.
       - name: Cargo cache registry, index and build
         uses: actions/cache@v2.1.4
         with:
@@ -84,7 +76,6 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-cache-${{ hashFiles('**/Cargo.lock') }}
 
-      # Run cargo tarpaulin & push result to coveralls.io
       - name: rust-tarpaulin code coverage check
         uses: actions-rs/tarpaulin@v0.1
         with:
@@ -107,7 +98,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      # Install Rust and required components
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: nightly
@@ -125,7 +115,6 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
-    # wget the shared deny.toml file from the QA repo
     - shell: bash
       run: wget https://raw.githubusercontent.com/maidsafe/QA/master/misc-scripts/deny.toml
 
@@ -140,14 +129,12 @@ jobs:
         os: [ubuntu-latest, windows-latest, macOS-latest]
     steps:
       - uses: actions/checkout@v2
-      # Install Rust
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           toolchain: stable
           override: true
 
-      # Cache.
       - name: Cargo cache registry, index and build
         uses: actions/cache@v2.1.4
         with:
@@ -157,20 +144,21 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-cache-${{ hashFiles('**/Cargo.lock') }}
       
-      # Run tests.
       - uses: actions-rs/cargo@v1
         with:
           command: test
           args: --release
 
-  # Test publish using --dry-run.
+      - name: run ping example as integration test
+        shell: bash
+        run: cargo run --example ping
+
   test-publish:
     if: "!startsWith(github.event.pull_request.title, 'Automated version bump')"
     name: Test Publish
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      # Install Rust
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal

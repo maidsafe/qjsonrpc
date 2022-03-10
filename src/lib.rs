@@ -13,11 +13,20 @@ mod jsonrpc;
 mod server_endpoint;
 mod utils;
 
-const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-24"];
+use std::time::Duration;
+
+const ALPN_QUIC_HTTP: &[u8] = b"hq-24";
+
+/// Default idle timeout for endpoint transfer config.
+///
+/// Ostensibly a little inside the 20s that a lot of routers might cut off at.
+pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(18);
 
 pub use client_endpoint::ClientEndpoint;
 pub use errors::{Error, Result};
-pub use server_endpoint::{Endpoint, IncomingConn, IncomingJsonRpcRequest, JsonRpcResponseStream};
+pub use server_endpoint::{
+    IncomingConn, IncomingJsonRpcRequest, JsonRpcResponseStream, ServerEndpoint,
+};
 
 pub use jsonrpc::{
     JsonRpcRequest, JsonRpcResponse, JSONRPC_INTERNAL_ERROR, JSONRPC_INVALID_PARAMS,

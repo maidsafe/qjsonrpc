@@ -7,14 +7,20 @@
 // specific language governing permissions and limitations relating to use of the SAFE Network
 // Software.
 
-use super::errors::Error;
 use super::Result;
-use std::time::Duration;
+use crate::DEFAULT_IDLE_TIMEOUT;
+use quinn::{IdleTimeout, VarInt};
 
-pub fn new_transport_cfg(idle_timeout_msec: u64) -> Result<quinn::TransportConfig> {
+pub fn new_transport_cfg(idle_timeout: Option<u64>) -> Result<(quinn::TransportConfig, u64)> {
     let mut transport_config = quinn::TransportConfig::default();
-    let _ = transport_config
-        .max_idle_timeout(Some(Duration::from_millis(idle_timeout_msec)))
-        .map_err(|e| Error::GeneralError(e.to_string()))?;
-    Ok(transport_config)
+    let timeout = if let Some(timeout) = idle_timeout {
+        transport_config.max_idle_timeout(Some(IdleTimeout::from(VarInt::from_u64(timeout)?)));
+        timeout
+    } else {
+        let default_timeout = DEFAULT_IDLE_TIMEOUT.as_millis() as u64;
+        transport_config
+            .max_idle_timeout(Some(IdleTimeout::from(VarInt::from_u64(default_timeout)?)));
+        default_timeout
+    };
+    Ok((transport_config, timeout))
 }
