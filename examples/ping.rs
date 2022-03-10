@@ -6,7 +6,7 @@
 // kind, either express or implied. please review the licences for the specific language governing
 // permissions and limitations relating to use of the safe network software.
 
-use qjsonrpc::{ClientEndpoint, Endpoint, Error, JsonRpcResponse, Result};
+use qjsonrpc::{ClientEndpoint, Error, JsonRpcResponse, Result, ServerEndpoint};
 use serde_json::json;
 use tempfile::tempdir;
 use url::Url;
@@ -25,12 +25,25 @@ const ERROR_METHOD_NOT_FOUND: isize = -32601;
 #[tokio::main]
 async fn main() -> Result<()> {
     let cert_base_dir = tempdir()?;
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).map_err(|err| {
+        Error::GeneralError(format!(
+            "Failed to generate self-signed certificate: {}",
+            err
+        ))
+    })?;
+    let cert_path = &cert_base_dir.path().join("cert.der");
+    let key_path = &cert_base_dir.path().join("key.der");
+    let key = cert.serialize_private_key_der();
+    let cert = cert
+        .serialize_der()
+        .map_err(|err| Error::GeneralError(format!("Failed to serialise certificate: {}", err)))?;
+    std::fs::write(&cert_path, &cert)
+        .map_err(|err| Error::GeneralError(format!("Failed to write certificate: {}", err)))?;
+    std::fs::write(&key_path, &key)
+        .map_err(|err| Error::GeneralError(format!("Failed to write private key: {}", err)))?;
 
-    // ----------------------------server----------------------------
-    // (call Endpiont::new before EndpointClinet::new() up first so that that cert_base_dir gets populated)
-    let qjsonrpc_endpoint = Endpoint::new(cert_base_dir.path(), Some(TIMEOUT_MS))?;
+    let qjsonrpc_endpoint = ServerEndpoint::new(cert_path, key_path, Some(TIMEOUT_MS))?;
     let server_task = async move {
-        // convert LISTEN to socket address and bind to it
         let listen_socket_addr = Url::parse(LISTEN)
             .map_err(|_| Error::GeneralError("Invalid endpoint address".to_string()))?
             .socket_addrs(|| None)
@@ -41,11 +54,8 @@ async fn main() -> Result<()> {
             .map_err(|err| Error::GeneralError(format!("Failed to bind endpoint: {}", err)))?;
         println!("[server] Bound to address '{}'", &listen_socket_addr);
 
-        // wait for a client connection and respond to the first connection with an ack
         if let Some(mut in_req) = in_conn.get_next().await {
-            // each client stream constitutes a new jsonrpc request
             while let Some((jsonrpc_req, mut resp_stream)) = in_req.get_next().await {
-                // respond 'ack' or an error, then drop the connection
                 println!("[server] Received jsonrpc request: {:?}", &jsonrpc_req);
                 let resp = match jsonrpc_req.method.as_str() {
                     METHOD_PING => JsonRpcResponse::result(json!("ack"), jsonrpc_req.id),
@@ -64,16 +74,13 @@ async fn main() -> Result<()> {
         Ok(())
     };
 
-    // ----------------------------client----------------------------
-    let client = ClientEndpoint::new(cert_base_dir.path(), Some(TIMEOUT_MS), false)?;
+    let client = ClientEndpoint::new(&cert_path, Some(TIMEOUT_MS), false)?;
     let client_task = async move {
         let mut out_conn = client.bind()?;
 
-        // try to connect
         let mut out_jsonrpc_req = out_conn.connect(LISTEN, None).await?;
         println!("[client] connected to {}", LISTEN);
 
-        // send 'ping' with no parameters + print response
         println!("[client] sending '{}' method to server...", METHOD_PING);
         let resp_result = out_jsonrpc_req
             .send::<String>(METHOD_PING, json!(null))
@@ -83,6 +90,5 @@ async fn main() -> Result<()> {
         Ok(())
     };
 
-    // run all
     tokio::try_join!(client_task, server_task).and_then(|_| Ok(()))
 }

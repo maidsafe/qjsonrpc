@@ -12,101 +12,67 @@ use super::{
 };
 use crate::utils;
 use futures::StreamExt;
-use log::{debug, info, warn};
-use std::{
-    fs, io,
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use log::{debug, warn};
+use rustls::{Certificate, PrivateKey, RootCertStore};
+use std::{fs, net::SocketAddr, path::Path, sync::Arc};
 
-// JSON-RPC over QUIC server endpoint
-pub struct Endpoint {
+/// A QUIC Server Endpoint for using JSON-RPC.
+///
+/// Based on the QUINN library's implementation of QUIC.
+///
+/// As per `ClientEndpoint`, the additional fields are added for unit testing, but could potentially
+/// be used by callers of the library.
+pub struct ServerEndpoint {
     config: quinn::ServerConfig,
+    #[allow(dead_code)]
+    crypto_config: rustls::ServerConfig,
+    #[allow(dead_code)]
+    idle_timeout: u64,
 }
 
-impl Endpoint {
-    // cert_base_path: Base path where to locate custom certificate authority to trust, in DER format
-    // idle_timeout: Optional number of millis before timing out an idle connection
-    pub fn new<P: AsRef<Path>>(cert_base_path: P, idle_timeout: Option<u64>) -> Result<Self> {
-        let mut server_config = quinn::ServerConfig::default();
-        if let Some(timeout) = idle_timeout {
-            server_config.transport = Arc::new(utils::new_transport_cfg(timeout)?)
-        };
+impl ServerEndpoint {
+    /// Create a new `ServerEndpoint` instance.
+    ///
+    /// The path of a certificate is required.
+    ///
+    /// The corresponding private key for the certificate is required.
+    ///
+    /// An optional idle timeout can be specified in milliseconds; otherwise a default of 18
+    /// seconds will be used.
+    pub fn new<P: AsRef<Path>>(
+        cert_path: P,
+        key_path: P,
+        idle_timeout: Option<u64>,
+    ) -> Result<Self> {
+        let (cert, key) = fs::read(&cert_path).and_then(|x| Ok((x, fs::read(&key_path)?)))?;
+        let mut store = RootCertStore::empty();
+        let (added, _) = store.add_parsable_certificates(vec![cert.clone()].as_slice());
+        if added != 1 {
+            return Err(Error::ServerError(
+                "A valid certificate must be supplied".to_string(),
+            ));
+        }
 
-        let mut server_config = quinn::ServerConfigBuilder::new(server_config);
-        server_config.protocols(ALPN_QUIC_HTTP);
+        let key = PrivateKey(key);
+        let cert = Certificate(cert);
+        let mut crypto_config = rustls::ServerConfig::builder()
+            .with_safe_defaults()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert], key)?;
+        crypto_config.alpn_protocols = vec![ALPN_QUIC_HTTP.to_vec()];
 
-        let mut cert_path = PathBuf::new();
-        cert_path.push(&cert_base_path);
-        cert_path.push("cert.der");
-
-        let mut key_path = PathBuf::new();
-        key_path.push(&cert_base_path);
-        key_path.push("key.der");
-
-        let (cert, key) = match fs::read(&cert_path).and_then(|x| Ok((x, fs::read(&key_path)?))) {
-            Ok(x) => x,
-            Err(ref e) if e.kind() == io::ErrorKind::NotFound => {
-                info!("Generating self-signed certificate...");
-                let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).map_err(
-                    |err| {
-                        Error::GeneralError(format!(
-                            "Failed to generate self-signed certificate: {}",
-                            err
-                        ))
-                    },
-                )?;
-                let key = cert.serialize_private_key_der();
-                let cert = cert.serialize_der().map_err(|err| {
-                    Error::GeneralError(format!("Failed to serialise certificate: {}", err))
-                })?;
-                fs::create_dir_all(cert_base_path).map_err(|err| {
-                    Error::GeneralError(format!("Failed to create certificate directory: {}", err))
-                })?;
-                fs::write(&cert_path, &cert).map_err(|err| {
-                    Error::GeneralError(format!("Failed to write certificate: {}", err))
-                })?;
-                fs::write(&key_path, &key).map_err(|err| {
-                    Error::GeneralError(format!("Failed to write private key: {}", err))
-                })?;
-                (cert, key)
-            }
-            Err(e) => {
-                return Err(Error::GeneralError(format!(
-                    "Failed to read certificate: {}",
-                    e
-                )));
-            }
-        };
-        let key = quinn::PrivateKey::from_der(&key).map_err(|err| {
-            Error::GeneralError(format!("Failed parse private key from file: {}", err))
-        })?;
-        let cert = quinn::Certificate::from_der(&cert).map_err(|err| {
-            Error::GeneralError(format!("Failed to parse certificate from file: {}", err))
-        })?;
-        server_config
-            .certificate(quinn::CertificateChain::from_certs(vec![cert]), key)
-            .map_err(|err| {
-                Error::GeneralError(format!(
-                    "Failed to set certificate for communication: {}",
-                    err
-                ))
-            })?;
-
-        let config = server_config.build();
-        Ok(Self { config })
+        let mut config = quinn::ServerConfig::with_crypto(Arc::new(crypto_config.clone()));
+        let (transport, timeout) = utils::new_transport_cfg(idle_timeout)?;
+        config.transport = Arc::new(transport);
+        Ok(Self {
+            config,
+            crypto_config,
+            idle_timeout: timeout,
+        })
     }
 
-    // Bind server endpoint to a socket address to start listening for connections on it
     pub fn bind(&self, listen_socket_addr: &SocketAddr) -> Result<IncomingConn> {
-        let mut quinn_endpoint_builder = quinn::Endpoint::builder();
-        quinn_endpoint_builder.listen(self.config.clone());
-
-        let (_endpoint, incoming) = quinn_endpoint_builder
-            .bind(&listen_socket_addr)
-            .map_err(|err| Error::GeneralError(format!("Failed to bind QUIC endpoint: {}", err)))?;
-
+        let (_, incoming) = quinn::Endpoint::server(self.config.clone(), *listen_socket_addr)?;
         Ok(IncomingConn::new(incoming))
     }
 }
@@ -225,5 +191,78 @@ impl JsonRpcResponseStream {
                 err
             ))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ServerEndpoint, ALPN_QUIC_HTTP};
+    use assert_fs::prelude::*;
+    use color_eyre::{eyre::eyre, Result};
+    use std::str;
+
+    #[test]
+    fn new_should_return_configured_endpoint() -> Result<()> {
+        let tmp_dir = assert_fs::TempDir::new()?;
+        let cert_file = tmp_dir.child("cert.der");
+        let key_file = tmp_dir.child("key.der");
+
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+        cert_file.write_binary(cert.serialize_der()?.as_slice())?;
+        key_file.write_binary(cert.serialize_private_key_der().as_slice())?;
+
+        let endpoint = ServerEndpoint::new(cert_file.path(), key_file.path(), None)?;
+
+        assert_eq!(endpoint.idle_timeout, 18000);
+        assert_eq!(
+            str::from_utf8(&endpoint.crypto_config.alpn_protocols[0])?,
+            str::from_utf8(ALPN_QUIC_HTTP)?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn new_should_use_supplied_idle_timeout() -> Result<()> {
+        let tmp_dir = assert_fs::TempDir::new()?;
+        let cert_file = tmp_dir.child("cert.der");
+        let key_file = tmp_dir.child("key.der");
+
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+        cert_file.write_binary(cert.serialize_der()?.as_slice())?;
+        key_file.write_binary(cert.serialize_private_key_der().as_slice())?;
+
+        let endpoint = ServerEndpoint::new(cert_file.path(), key_file.path(), Some(10000))?;
+
+        assert_eq!(endpoint.idle_timeout, 10000);
+
+        Ok(())
+    }
+
+    #[test]
+    fn new_should_ensure_valid_der_cert_is_used() -> Result<()> {
+        let tmp_dir = assert_fs::TempDir::new()?;
+        let cert_file = tmp_dir.child("cert.der");
+        let key_file = tmp_dir.child("key.der");
+
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+        cert_file.write_binary(b"this isn't really a DER certificate")?;
+        key_file.write_binary(cert.serialize_private_key_der().as_slice())?;
+
+        let result = ServerEndpoint::new(cert_file.path(), key_file.path(), Some(10000));
+
+        // For some reason you can't call `unwrap_err` on this result, so the check needs to be
+        // more verbose.
+        match result {
+            Ok(_) => return Err(eyre!("this test case should return an error")),
+            Err(e) => {
+                assert_eq!(
+                    e.to_string(),
+                    "ServerError: A valid certificate must be supplied"
+                );
+            }
+        }
+
+        Ok(())
     }
 }

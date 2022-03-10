@@ -7,13 +7,22 @@
 // specific language governing permissions and limitations relating to use of the SAFE Network
 // Software.
 
-use std::fmt;
-
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("ClientError: {0}")]
     ClientError(String),
+    #[error("ServerError: {0}")]
+    ServerError(String),
+    #[error("RemoteEndpointError: {0}")]
     RemoteEndpointError(String),
+    #[error("GeneralError: {0}")]
     GeneralError(String),
+    #[error("An error occurred configuring crypto options")]
+    CryptoConfigError(#[from] rustls::Error),
+    #[error("An error occurred parsing idle timeout for transport config")]
+    IdleTimeoutParsingError(#[from] quinn_proto::VarIntBoundsExceeded),
+    #[error("An error occurred configuring client to use certificates")]
+    Webpki(#[from] webpki::Error),
 }
 
 impl From<std::io::Error> for Error {
@@ -23,24 +32,3 @@ impl From<std::io::Error> for Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
-
-impl From<Error> for String {
-    fn from(error: Error) -> String {
-        error.to_string()
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use Error::*;
-
-        let (error_type, error_msg) = match self {
-            ClientError(info) => ("ClientError", info),
-            RemoteEndpointError(info) => ("RemoteEndpointError", info),
-            GeneralError(info) => ("GeneralError", info),
-        };
-        let description = format!("[Error] {} - {}", error_type, error_msg);
-
-        write!(f, "{}", description)
-    }
-}

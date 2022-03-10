@@ -129,7 +129,7 @@ where
     let res_payload = std::str::from_utf8(response_bytes)
         .map_err(|err| Error::ClientError(format!("Failed to decode response data: {}", err)))?;
 
-    match serde_json::from_str(&res_payload) {
+    match serde_json::from_str(res_payload) {
         Ok(JsonRpcResponse {
             jsonrpc,
             result: Some(r),

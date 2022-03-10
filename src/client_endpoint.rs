@@ -10,83 +10,91 @@
 use super::{jsonrpc::parse_jsonrpc_response, Error, JsonRpcRequest, Result, ALPN_QUIC_HTTP};
 use crate::utils;
 use log::debug;
+use quinn::Endpoint;
+use rustls::{ClientConfig, KeyLogFile, RootCertStore};
 use serde::de::DeserializeOwned;
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Instant,
-};
+use std::{fs, path::Path, sync::Arc, time::Instant};
 use url::Url;
 
-// JSON-RPC over QUIC client endpoint
+/// A QUIC Client Endpoint for using JSON-RPC.
+///
+/// Based on the QUINN library's implementation of QUIC.
+///
+/// The `quinn::ClientConfig` struct keeps all its state private after it's been set, which is a
+/// pain for unit testing. The `rustls::ClientConfig` exposes a couple of fields you can use to
+/// verify configuration has been set correctly. That's the reason the additional `crypto_config`
+/// and `idle_timeout` fields have been added; however, it could be beneficial for users of
+/// `ClientEndpoint` to be able to read these fields.
+///
+/// Strictly speaking of course, it would still be possible for `idle_timeout` in this struct and
+/// the private idle timeout to be set to different values, but there's not much we can do if the
+/// `quinn` developers choose to not expose the information.
 pub struct ClientEndpoint {
     config: quinn::ClientConfig,
+    #[allow(dead_code)]
+    crypto_config: rustls::ClientConfig,
+    #[allow(dead_code)]
+    idle_timeout: u64,
 }
 
 impl ClientEndpoint {
-    // cert_base_path: Base path where to locate custom certificate authority to trust, in DER format
-    // idle_timeout: Optional number of millis before timing out an idle connection
-    // keylog: Perform NSS-compatible TLS key logging to the file specified in `SSLKEYLOGFILE`
+    /// Create a new `ClientEndpoint` instance.
+    ///
+    /// The path of a certificate is required.
+    ///
+    /// An optional idle timeout can be specified in milliseconds; otherwise a default of 18
+    /// seconds will be used.
+    ///
+    /// If `enable_keylog` is `true`, key logging will be output to the path specified by the
+    /// `SSLKEYLOGFILE` environment variable, which is required to be set.
     pub fn new<P: AsRef<Path>>(
-        cert_base_path: P,
+        cert_path: P,
         idle_timeout: Option<u64>,
-        keylog: bool,
+        enable_keylog: bool,
     ) -> Result<Self> {
-        let mut client_config = quinn::ClientConfigBuilder::default();
-        client_config.protocols(ALPN_QUIC_HTTP);
-
-        if keylog {
-            client_config.enable_keylog();
+        let cert = fs::read(&cert_path)
+            .map_err(|err| Error::ClientError(format!("Failed to read certificate: {}", err)))?;
+        let mut store = RootCertStore::empty();
+        let (added, _) = store.add_parsable_certificates(vec![cert].as_slice());
+        if added != 1 {
+            return Err(Error::ClientError(
+                "A valid certificate must be supplied".to_string(),
+            ));
         }
 
-        let mut ca_path = PathBuf::new();
-        ca_path.push(cert_base_path);
-        ca_path.push("cert.der");
+        let mut client_crypto = ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(store)
+            .with_no_client_auth();
+        client_crypto.alpn_protocols = vec![ALPN_QUIC_HTTP.to_vec()];
+        if enable_keylog {
+            match std::env::var("SSLKEYLOGFILE") {
+                Ok(_) => client_crypto.key_log = Arc::new(KeyLogFile::new()),
+                Err(_) => {
+                    return Err(Error::ClientError(
+                        "To enable key logging the SSLKEYLOGFILE environment variable must be set."
+                            .to_string(),
+                    ))
+                }
+            }
+        }
 
-        let ca_certificate = fs::read(&ca_path).map_err(|err| {
-            Error::ClientError(format!(
-                "Failed to read certificate from '{}': {}",
-                ca_path.display(),
-                err
-            ))
-        })?;
-        let ca_authority = quinn::Certificate::from_der(&ca_certificate).map_err(|err| {
-            Error::ClientError(format!(
-                "Failed to obtain CA authority from certificate found at '{}': {}",
-                ca_path.display(),
-                err
-            ))
-        })?;
-
-        client_config
-            .add_certificate_authority(ca_authority)
-            .map_err(|err| {
-                Error::ClientError(format!(
-                    "Failed to add CA authority to QUIC client configuration: {}",
-                    err
-                ))
-            })?;
-
-        let mut config = client_config.build();
-        if let Some(timeout) = idle_timeout {
-            config.transport = Arc::new(utils::new_transport_cfg(timeout)?)
-        };
-        Ok(Self { config })
+        let mut config = quinn::ClientConfig::new(Arc::new(client_crypto.clone()));
+        let (transport, timeout) = utils::new_transport_cfg(idle_timeout)?;
+        config.transport = Arc::new(transport);
+        Ok(Self {
+            config,
+            crypto_config: client_crypto,
+            idle_timeout: timeout,
+        })
     }
 
     pub fn bind(&self) -> Result<OutgoingConn> {
-        let mut quinn_endpoint_builder = quinn::Endpoint::builder();
-        quinn_endpoint_builder.default_client_config(self.config.clone());
-
         let socket_addr = "[::]:0".parse().map_err(|err| {
             Error::ClientError(format!("Failed to parse client endpoint address: {}", err))
         })?;
-
-        let (endpoint, _) = quinn_endpoint_builder.bind(&socket_addr).map_err(|err| {
-            Error::ClientError(format!("Failed to bind client endpoint: {}", err))
-        })?;
-
+        let mut endpoint = Endpoint::client(socket_addr)?;
+        endpoint.set_default_client_config(self.config.clone());
         Ok(OutgoingConn::new(endpoint))
     }
 }
@@ -118,12 +126,12 @@ impl OutgoingConn {
             .map_err(|_| Error::ClientError("Invalid remote end point address".to_string()))?[0];
         let host = cert_host
             .as_ref()
-            .map_or_else(|| url.host_str(), |x| Some(&x))
+            .map_or_else(|| url.host_str(), |x| Some(x))
             .ok_or_else(|| Error::ClientError("No certificate hostname specified".to_string()))?;
 
         let new_conn = self
             .quinn_endpoint
-            .connect(&remote, &host)
+            .connect(remote, host)
             .map_err(|err| {
                 Error::ClientError(format!(
                     "Failed when attempting to create a connection with remote QUIC endpoint: {}",
@@ -199,5 +207,96 @@ impl OutgoingJsonRpcRequest {
         self.quinn_connection.close(0u32.into(), b"");
 
         parse_jsonrpc_response(received_bytes.as_slice())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{ClientEndpoint, ALPN_QUIC_HTTP};
+    use assert_fs::prelude::*;
+    use color_eyre::{eyre::eyre, Result};
+    use std::str;
+
+    #[test]
+    fn new_should_return_configured_endpoint() -> Result<()> {
+        let tmp_dir = assert_fs::TempDir::new()?;
+        let cert_file = tmp_dir.child("cert.der");
+
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+        cert_file.write_binary(cert.serialize_der()?.as_slice())?;
+
+        let endpoint = ClientEndpoint::new(cert_file.path(), None, false)?;
+
+        assert_eq!(endpoint.idle_timeout, 18000);
+        assert_eq!(
+            str::from_utf8(&endpoint.crypto_config.alpn_protocols[0])?,
+            str::from_utf8(ALPN_QUIC_HTTP)?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn new_should_use_supplied_idle_timeout() -> Result<()> {
+        let tmp_dir = assert_fs::TempDir::new()?;
+        let cert_file = tmp_dir.child("cert.der");
+
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+        cert_file.write_binary(cert.serialize_der()?.as_slice())?;
+
+        let endpoint = ClientEndpoint::new(cert_file.path(), Some(10000), false)?;
+
+        assert_eq!(endpoint.idle_timeout, 10000);
+
+        Ok(())
+    }
+
+    #[test]
+    fn new_should_ensure_env_var_is_set_when_key_logging_is_enabled() -> Result<()> {
+        let tmp_dir = assert_fs::TempDir::new()?;
+        let cert_file = tmp_dir.child("cert.der");
+
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+        cert_file.write_binary(cert.serialize_der()?.as_slice())?;
+
+        let result = ClientEndpoint::new(cert_file.path(), None, true);
+
+        // For some reason you can't call `unwrap_err` on this result, so the check needs to be
+        // more verbose.
+        match result {
+            Ok(_) => return Err(eyre!("this test case should return an error")),
+            Err(e) => {
+                assert_eq!(
+                    e.to_string(),
+                    "ClientError: To enable key logging the SSLKEYLOGFILE environment variable \
+                    must be set."
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn new_should_ensure_valid_der_cert_is_used() -> Result<()> {
+        let tmp_dir = assert_fs::TempDir::new()?;
+        let cert_file = tmp_dir.child("cert.der");
+        cert_file.write_binary(b"this isn't really a DER certificate")?;
+
+        let result = ClientEndpoint::new(cert_file.path(), None, false);
+
+        // For some reason you can't call `unwrap_err` on this result, so the check needs to be
+        // more verbose.
+        match result {
+            Ok(_) => return Err(eyre!("this test case should return an error")),
+            Err(e) => {
+                assert_eq!(
+                    e.to_string(),
+                    "ClientError: A valid certificate must be supplied"
+                );
+            }
+        }
+
+        Ok(())
     }
 }
