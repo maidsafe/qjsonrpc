@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [0.3.0](https://github.com/maidsafe/qjsonrpc/compare/v0.2.3...v0.3.0) (2022-03-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* the API for `ServerEndpoint` and `ClientEndpoint` have both changed to construct
+instances by providing paths to certificates and keys, rather than a directory containing them. To
+me, for a generic library, it makes more sense for the caller to provide certs and keys from
+wherever they wanted to and not constrain them to using DER certificates with a particular file
+name. This change also places responsibility on the caller to generate self-signed certificates,
+which I would argue should probably be done in the Safe CLI and Auth processes, not even in
+`sn_api`.
+
+Some additional functionality was added to validate the provided certificate.
+
+Unit tests were added for both these structs where possible, though things were made difficult by
+the `quinn` and `rustls` crates, since they hide information after it's been set. For more info, see
+my doc comments on `ClientEndpoint`.
+
+I added the `ping` example to CI for integration testing the code that requires a real connection.
+It may have been possible to unit test this code by creating a trait to implement a fake connection,
+but I decided that was excessive for a small library.
+
+### Features
+
+* upgrade quinn to 0.8 ([046b371](https://github.com/maidsafe/qjsonrpc/commit/046b3712111f004e5ae80ef217632df9c2b95edc))
+
 ### [0.2.3](https://github.com/maidsafe/qjsonrpc/compare/v0.2.2...v0.2.3) (2021-06-15)
 
 ### [0.2.2](https://github.com/maidsafe/qjsonrpc/compare/v0.2.1...v0.2.2) (2021-05-24)
