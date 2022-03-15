@@ -43,7 +43,6 @@ webpki = "~0.21.3"
 assert_fs = "~1.0"
 color-eyre = "~0.6"
 tempfile = "3"
-
-  [dev-dependencies.tokio]
-  version = "1.17.0"
-  features = [ "macros", "rt-multi-thread" ]
+tokio = { version = "1.17.0", features = ["macros", "rt-multi-thread"]  }
+tracing = "~0.1.26"
+tracing-subscriber = "~0.2.15"

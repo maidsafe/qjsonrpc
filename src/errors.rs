@@ -7,20 +7,28 @@
 // specific language governing permissions and limitations relating to use of the SAFE Network
 // Software.
 
+use crate::{JsonRpcResponse, JsonRpcResponseStream};
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("ClientError: {0}")]
     ClientError(String),
-    #[error("ServerError: {0}")]
-    ServerError(String),
-    #[error("RemoteEndpointError: {0}")]
-    RemoteEndpointError(String),
-    #[error("GeneralError: {0}")]
-    GeneralError(String),
     #[error("An error occurred configuring crypto options")]
     CryptoConfigError(#[from] rustls::Error),
+    #[error("GeneralError: {0}")]
+    GeneralError(String),
     #[error("An error occurred parsing idle timeout for transport config")]
     IdleTimeoutParsingError(#[from] quinn_proto::VarIntBoundsExceeded),
+    /// For use when there's a problem parsing a request that was sent to the server.
+    ///
+    /// The response object will indicate the problem and the stream can be used to send it back to
+    /// the client.
+    #[error("An error occurred while parsing incoming JSON-RPC request")]
+    JsonRpcRequestParsingError(JsonRpcResponse, JsonRpcResponseStream),
+    #[error("RemoteEndpointError: {0}")]
+    RemoteEndpointError(String),
+    #[error("ServerError: {0}")]
+    ServerError(String),
     #[error("An error occurred configuring client to use certificates")]
     Webpki(#[from] webpki::Error),
 }
