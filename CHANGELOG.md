@@ -2,6 +2,42 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [0.4.0](https://github.com/maidsafe/qjsonrpc/compare/v0.3.0...v0.4.0) (2022-03-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* we will now return `Result` rather than `Option` for managing connections and
+incoming requests.
+
+In the previous setup, the `get_next` function on `IncomingJsonRpcRequest` returned an `Option`
+rather than a `Result`. The problem with this is it was swallowing some errors that would be
+relevant to return back to the client, such as when the client's request couldn't be parsed by the
+server. This change does make things a bit more clunky for the caller of `get_next`: you have to
+`match` on a `Result` then unwrap an `Option`, rather than just unwrapping the `Option` directly.
+However, my view would be that correctness would be preferable to convenience in this case. It also
+gives callers the ability to respond to certain errors rather than making that decision for them by
+consuming the error and returning back `None`.
+
+With this change in mind, a specific `JsonRpcRequestParsingError` was introduced that provides a
+response and a stream to use to send the response back to the client, to indicate something went
+wrong.
+
+The same change was applied to `IncomingConn`, which was also swallowing errors and returning
+`None`.
+
+Some test coverage was added around the JSON parsing functions. It might perhaps be possible to add
+some integration tests to get more coverage on the connection and request management, but for now,
+at least some of it is covered by the ping example.
+
+Finally, the changes for returning `Result` forced an update for the example. The request loop for
+the example was removed because right now we can only send one request per connection. I've proposed
+a change for that, but will deal with it in another commit.
+
+### Features
+
+* return result rather than option for connections ([6202096](https://github.com/maidsafe/qjsonrpc/commit/6202096b55d2b29b184a7cc36538ed9937b151b2))
+
 ## [0.3.0](https://github.com/maidsafe/qjsonrpc/compare/v0.2.3...v0.3.0) (2022-03-11)
 
 

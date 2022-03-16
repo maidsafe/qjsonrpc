@@ -1,6 +1,6 @@
 [package]
 name = "qjsonrpc"
-version = "0.3.0"
+version = "0.4.0"
 description = "JSON-RPC over QUIC comm"
 authors = [ "bochaco <gabrielviganotti@gmail.com>" ]
 license = "MIT OR BSD-3-Clause"
@@ -43,6 +43,9 @@ webpki = "~0.21.3"
 assert_fs = "~1.0"
 color-eyre = "~0.6"
 tempfile = "3"
-tokio = { version = "1.17.0", features = ["macros", "rt-multi-thread"]  }
 tracing = "~0.1.26"
 tracing-subscriber = "~0.2.15"
+
+  [dev-dependencies.tokio]
+  version = "1.17.0"
+  features = [ "macros", "rt-multi-thread" ]
