@@ -1,7 +1,7 @@
 name: Version bump and create PR for changes
 
 on:
-  # Trigger the workflow on push only for the master branch
+  # Trigger the workflow on push only for the main branch
   push:
     branches:
       - main
@@ -19,6 +19,6 @@ jobs:
         with:
           fetch-depth: '0'
       - name: Bump Version
-        uses: maidsafe/rust-version-bump-branch-creator@v2
+        uses: maidsafe/rust-version-bump-branch-creator@v3
         with:
           token: ${{ secrets.BRANCH_CREATOR_TOKEN }}
