@@ -5,12 +5,12 @@
 # 1. Generates a release build.
 # 2. If the last commit is a version change, publish.
 
-name: Master
+name: Main
 
 on:
   push:
     branches:
-      - master
+      - main
 
 env:
   # Run all cargo commands with --verbose.
@@ -48,7 +48,7 @@ jobs:
       # Make sure the code builds.
       - name: Build
         run: cargo build --release
-  
+
   # Publish if we're on a tag here.
   publish:
     name: Publish
@@ -60,7 +60,7 @@ jobs:
       # checkout with fetch-depth: '0' to be sure to retrieve all commits to look for the semver commit message
         with:
           fetch-depth: '0'
-     
+
       ## Install Rust
       - uses: actions-rs/toolchain@v1
         with:

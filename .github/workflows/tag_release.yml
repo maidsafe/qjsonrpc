@@ -4,7 +4,7 @@ on:
   # Trigger the workflow on push only for the master branch
   push:
     branches:
-      - master
+      - main
 
 env:
   NODE_ENV: 'development'
@@ -33,5 +33,5 @@ jobs:
             git remote add github "$REPO"
             git config --local user.email "action@github.com"
             git config --local user.name "GitHub Action"
-        - name: Push tags to master
-          run: git push "https://$GITHUB_ACTOR:$GITHUB_TOKEN@github.com/$GITHUB_REPOSITORY" HEAD:master --tags
+        - name: Push tags to main
+          run: git push "https://$GITHUB_ACTOR:$GITHUB_TOKEN@github.com/$GITHUB_REPOSITORY" HEAD:main --tags
