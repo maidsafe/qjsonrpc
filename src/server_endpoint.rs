@@ -134,8 +134,7 @@ impl IncomingJsonRpcRequest {
                     Err(err) => {
                         warn!("Failed to read incoming request: {}", err);
                         return Err(Error::ServerError(format!(
-                            "Failed to read incoming request: {}",
-                            err
+                            "Failed to read incoming request: {err}"
                         )));
                     }
                     Ok(bi_stream) => bi_stream,
@@ -170,10 +169,7 @@ impl IncomingJsonRpcRequest {
                     }
                     Err(err) => {
                         warn!("Failed to read request: {}", err);
-                        Err(Error::ServerError(format!(
-                            "Failed to read request: {}",
-                            err
-                        )))
+                        Err(Error::ServerError(format!("Failed to read request: {err}")))
                     }
                 }
             }
@@ -194,17 +190,15 @@ impl JsonRpcResponseStream {
 
     // Write a JsonRpcResponse into the current connection's sending stream
     pub async fn respond(&mut self, response: &JsonRpcResponse) -> Result<()> {
-        let serialised_res = serde_json::to_string(response).map_err(|err| {
-            Error::GeneralError(format!("Failed to serialise response: {:?}", err))
-        })?;
+        let serialised_res = serde_json::to_string(response)
+            .map_err(|err| Error::GeneralError(format!("Failed to serialise response: {err:?}")))?;
 
         self.quinn_send_stream
             .write_all(&serialised_res.into_bytes())
             .await
             .map_err(|err| {
                 Error::GeneralError(format!(
-                    "Failed to write entire buffer to response stream: {}",
-                    err
+                    "Failed to write entire buffer to response stream: {err}"
                 ))
             })
     }
@@ -213,8 +207,7 @@ impl JsonRpcResponseStream {
     pub async fn finish(&mut self) -> Result<()> {
         self.quinn_send_stream.finish().await.map_err(|err| {
             Error::GeneralError(format!(
-                "Failed to shutdown the response stream gracefully: {}",
-                err
+                "Failed to shutdown the response stream gracefully: {err}"
             ))
         })
     }

@@ -144,7 +144,7 @@ where
     T: DeserializeOwned,
 {
     let res_payload = std::str::from_utf8(response_bytes)
-        .map_err(|err| Error::ClientError(format!("Failed to decode response data: {}", err)))?;
+        .map_err(|err| Error::ClientError(format!("Failed to decode response data: {err}")))?;
 
     match serde_json::from_str(res_payload) {
         Ok(JsonRpcResponse {
@@ -154,12 +154,11 @@ where
         }) => {
             if jsonrpc != JSONRPC_VERSION {
                 Err(Error::ClientError(format!(
-                    "Received response with JSON-RPC version {}. Client only supports version {}.",
-                    jsonrpc, JSONRPC_VERSION
+                    "Received response with JSON-RPC version {jsonrpc}. Client only supports version {JSONRPC_VERSION}."
                 )))
             } else {
                 let result = serde_json::from_value(r).map_err(|err| {
-                    Error::ClientError(format!("Failed to decode response result: {}", err))
+                    Error::ClientError(format!("Failed to decode response result: {err}"))
                 })?;
 
                 Ok(result)
@@ -184,8 +183,7 @@ where
                 .to_string(),
         )),
         Err(err) => Err(Error::ClientError(format!(
-            "Failed to parse response document: {}",
-            err
+            "Failed to parse response document: {err}"
         ))),
     }
 }
