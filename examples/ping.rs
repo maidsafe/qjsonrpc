@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
 
         let mut in_conn = qjsonrpc_endpoint
             .bind(&listen_socket_addr)
-            .map_err(|err| Error::GeneralError(format!("Failed to bind endpoint: {}", err)))?;
+            .map_err(|err| Error::GeneralError(format!("Failed to bind endpoint: {err}")))?;
         println!("[server] Bound to address '{}'", &listen_socket_addr);
 
         match in_conn.get_next().await {
@@ -85,14 +85,14 @@ async fn main() -> Result<()> {
                             _ => {
                                 // Any other errors related to bad connections or receipt
                                 // of data, so we can't send a response back to the client.
-                                println!("[server] {}", err);
+                                println!("[server] {err}");
                             }
                         },
                     }
                 }
             }
             Err(e) => {
-                println!("[server] {}", e);
+                println!("[server] {e}");
             }
         }
 
@@ -104,9 +104,9 @@ async fn main() -> Result<()> {
         let mut out_conn = client.bind()?;
 
         let mut out_jsonrpc_req = out_conn.connect(LISTEN, None).await?;
-        println!("[client] connected to {}", LISTEN);
+        println!("[client] connected to {LISTEN}");
 
-        println!("[client] sending '{}' method to server...", METHOD_PING);
+        println!("[client] sending '{METHOD_PING}' method to server...");
         let resp_result = out_jsonrpc_req
             .send::<String>(METHOD_PING, json!(null))
             .await?;
@@ -120,21 +120,18 @@ async fn main() -> Result<()> {
 
 async fn generate_certificates(cert_base_dir: &TempDir) -> Result<(PathBuf, PathBuf)> {
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).map_err(|err| {
-        Error::GeneralError(format!(
-            "Failed to generate self-signed certificate: {}",
-            err
-        ))
+        Error::GeneralError(format!("Failed to generate self-signed certificate: {err}"))
     })?;
     let cert_path = cert_base_dir.path().join("cert.der");
     let key_path = cert_base_dir.path().join("key.der");
     let key = cert.serialize_private_key_der();
     let cert = cert
         .serialize_der()
-        .map_err(|err| Error::GeneralError(format!("Failed to serialise certificate: {}", err)))?;
-    std::fs::write(&cert_path, &cert)
-        .map_err(|err| Error::GeneralError(format!("Failed to write certificate: {}", err)))?;
-    std::fs::write(&key_path, &key)
-        .map_err(|err| Error::GeneralError(format!("Failed to write private key: {}", err)))?;
+        .map_err(|err| Error::GeneralError(format!("Failed to serialise certificate: {err}")))?;
+    std::fs::write(&cert_path, cert)
+        .map_err(|err| Error::GeneralError(format!("Failed to write certificate: {err}")))?;
+    std::fs::write(&key_path, key)
+        .map_err(|err| Error::GeneralError(format!("Failed to write private key: {err}")))?;
     Ok((cert_path, key_path))
 }
 
