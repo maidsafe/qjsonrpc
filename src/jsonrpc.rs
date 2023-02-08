@@ -38,7 +38,7 @@ impl JsonRpcRequest {
             jsonrpc: JSONRPC_VERSION.to_string(),
             method: method.to_string(),
             params,
-            id: rand::thread_rng().gen_range(0, std::u32::MAX) + 1,
+            id: rand::thread_rng().gen_range(0..std::u32::MAX) + 1,
         }
     }
 }
