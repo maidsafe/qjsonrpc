@@ -1,4 +1,4 @@
-// Copyright 2020 MaidSafe.net limited.
+// Copyright 2023 MaidSafe.net limited.
 //
 // This SAFE Network Software is licensed to you under the MIT license <LICENSE-MIT
 // http://opensource.org/licenses/MIT> or the Modified BSD license <LICENSE-BSD
@@ -9,15 +9,15 @@
 
 use crate::{JsonRpcResponse, JsonRpcResponseStream};
 
+pub type Result<T> = std::result::Result<T, Error>;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("ClientError: {0}")]
     ClientError(String),
-    #[error("An error occurred configuring crypto options")]
+    #[error("An error occurred configuring crypto options: {0}")]
     CryptoConfigError(#[from] rustls::Error),
-    #[error("GeneralError: {0}")]
-    GeneralError(String),
-    #[error("An error occurred parsing idle timeout for transport config")]
+    #[error("An error occurred parsing idle timeout for transport config: {0}")]
     IdleTimeoutParsingError(#[from] quinn_proto::VarIntBoundsExceeded),
     /// For use when there's a problem parsing a request that was sent to the server.
     ///
@@ -29,14 +29,8 @@ pub enum Error {
     RemoteEndpointError(String),
     #[error("ServerError: {0}")]
     ServerError(String),
-    #[error("An error occurred configuring client to use certificates")]
+    #[error("An error occurred configuring client to use certificates: {0}")]
     Webpki(#[from] webpki::Error),
+    #[error("I/O error occurred: {0}")]
+    IoError(#[from] std::io::Error),
 }
-
-impl From<std::io::Error> for Error {
-    fn from(error: std::io::Error) -> Self {
-        Error::GeneralError(error.to_string())
-    }
-}
-
-pub type Result<T> = std::result::Result<T, Error>;

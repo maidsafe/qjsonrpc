@@ -1,4 +1,4 @@
-// Copyright 2020 MaidSafe.net limited.
+// Copyright 2023 MaidSafe.net limited.
 //
 // This SAFE Network Software is licensed to you under the MIT license <LICENSE-MIT
 // http://opensource.org/licenses/MIT> or the Modified BSD license <LICENSE-BSD
@@ -9,7 +9,7 @@
 
 use super::{jsonrpc::parse_jsonrpc_response, Error, JsonRpcRequest, Result, ALPN_QUIC_HTTP};
 use crate::utils;
-use log::debug;
+use log::{debug, trace};
 use quinn::Endpoint;
 use rustls::{ClientConfig, KeyLogFile, RootCertStore};
 use serde::de::DeserializeOwned;
@@ -81,7 +81,9 @@ impl ClientEndpoint {
 
         let mut config = quinn::ClientConfig::new(Arc::new(client_crypto.clone()));
         let (transport, timeout) = utils::new_transport_cfg(idle_timeout)?;
-        config.transport = Arc::new(transport);
+        config.transport_config(Arc::new(transport));
+
+        trace!("Client endpoint with transport config: {config:?}");
         Ok(Self {
             config,
             crypto_config: client_crypto,
@@ -101,11 +103,11 @@ impl ClientEndpoint {
 
 // Outgoing QUIC connections
 pub struct OutgoingConn {
-    pub quinn_endpoint: quinn::Endpoint,
+    pub quinn_endpoint: Endpoint,
 }
 
 impl OutgoingConn {
-    pub(crate) fn new(quinn_endpoint: quinn::Endpoint) -> Self {
+    pub(crate) fn new(quinn_endpoint: Endpoint) -> Self {
         Self { quinn_endpoint }
     }
 
@@ -148,11 +150,8 @@ impl OutgoingConn {
             "Connected with remote QUIC endpoint at {:?}",
             start.elapsed()
         );
-        let quinn::NewConnection {
-            connection: conn, ..
-        } = { new_conn };
 
-        Ok(OutgoingJsonRpcRequest::new(conn))
+        Ok(OutgoingJsonRpcRequest::new(new_conn))
     }
 }
 

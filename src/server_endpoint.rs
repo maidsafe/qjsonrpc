@@ -1,4 +1,4 @@
-// Copyright 2020 MaidSafe.net limited.
+// Copyright 2023 MaidSafe.net limited.
 //
 // This SAFE Network Software is licensed to you under the MIT license <LICENSE-MIT
 // http://opensource.org/licenses/MIT> or the Modified BSD license <LICENSE-BSD
@@ -11,8 +11,7 @@ use super::{
     jsonrpc::parse_jsonrpc_request, Error, JsonRpcRequest, JsonRpcResponse, Result, ALPN_QUIC_HTTP,
 };
 use crate::utils;
-use futures::StreamExt;
-use log::{debug, warn};
+use log::{debug, trace, warn};
 use rustls::{Certificate, PrivateKey, RootCertStore};
 use std::{fs, net::SocketAddr, path::Path, sync::Arc};
 
@@ -44,6 +43,7 @@ impl ServerEndpoint {
         key_path: P,
         idle_timeout: Option<u64>,
     ) -> Result<Self> {
+        trace!("Creating a new server endpoint");
         let (cert, key) = fs::read(&cert_path).and_then(|x| Ok((x, fs::read(&key_path)?)))?;
         let mut store = RootCertStore::empty();
         let (added, _) = store.add_parsable_certificates(vec![cert.clone()].as_slice());
@@ -64,6 +64,8 @@ impl ServerEndpoint {
         let mut config = quinn::ServerConfig::with_crypto(Arc::new(crypto_config.clone()));
         let (transport, timeout) = utils::new_transport_cfg(idle_timeout)?;
         config.transport = Arc::new(transport);
+
+        trace!("Server endpoint with transport config: {config:?}");
         Ok(Self {
             config,
             crypto_config,
@@ -72,19 +74,19 @@ impl ServerEndpoint {
     }
 
     pub fn bind(&self, listen_socket_addr: &SocketAddr) -> Result<IncomingConn> {
-        let (_, incoming) = quinn::Endpoint::server(self.config.clone(), *listen_socket_addr)?;
-        Ok(IncomingConn::new(incoming))
+        let endpoint = quinn::Endpoint::server(self.config.clone(), *listen_socket_addr)?;
+        Ok(IncomingConn::new(endpoint))
     }
 }
 
 // Stream of incoming QUIC connections
 pub struct IncomingConn {
-    quinn_incoming: quinn::Incoming,
+    quinn_endpoint: quinn::Endpoint,
 }
 
 impl IncomingConn {
-    pub(crate) fn new(quinn_incoming: quinn::Incoming) -> Self {
-        Self { quinn_incoming }
+    pub(crate) fn new(quinn_endpoint: quinn::Endpoint) -> Self {
+        Self { quinn_endpoint }
     }
 
     /// Get the next incoming peer connection.
@@ -92,11 +94,11 @@ impl IncomingConn {
     /// The `next` function blocks until a peer establishes a new connection.
     pub async fn get_next(&mut self) -> Result<Option<IncomingJsonRpcRequest>> {
         debug!("Wait for new incoming connection...");
-        match self.quinn_incoming.next().await {
-            Some(quinn_conn) => match quinn_conn.await {
-                Ok(quinn::NewConnection { bi_streams, .. }) => {
+        match self.quinn_endpoint.accept().await {
+            Some(connecting) => match connecting.await {
+                Ok(conn) => {
                     debug!("Established new connection from peer");
-                    Ok(Some(IncomingJsonRpcRequest::new(bi_streams)))
+                    Ok(Some(IncomingJsonRpcRequest::new(conn)))
                 }
                 Err(err) => {
                     debug!("Error when establishing new peer connection");
@@ -110,70 +112,67 @@ impl IncomingConn {
 
 // Stream of incoming JSON-RPC request messages
 pub struct IncomingJsonRpcRequest {
-    bi_streams: quinn::IncomingBiStreams,
+    quinn_connection: quinn::Connection,
 }
 
 impl IncomingJsonRpcRequest {
-    pub(crate) fn new(bi_streams: quinn::IncomingBiStreams) -> Self {
-        Self { bi_streams }
+    pub(crate) fn new(quinn_connection: quinn::Connection) -> Self {
+        Self { quinn_connection }
     }
 
     // Each stream initiated by the client constitutes a new request
     pub async fn get_next(&mut self) -> Result<Option<(JsonRpcRequest, JsonRpcResponseStream)>> {
-        match self.bi_streams.next().await {
-            None => Ok(None),
-            Some(stream) => {
-                let (send, recv): (quinn::SendStream, quinn::RecvStream) = match stream {
-                    Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
-                        // This seems to be Quinn's mechanism for closing a connection. Not sure
-                        // why they treat it as an error. For our purposes we return an Ok result
-                        // with no request to process.
-                        debug!("Connection terminated");
-                        return Ok(None);
+        let (send, recv) = match self.quinn_connection.accept_bi().await {
+            Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
+                // This seems to be Quinn's mechanism for closing a connection. Not sure
+                // why they treat it as an error. For our purposes we return an Ok result
+                // with no request to process.
+                debug!("Connection terminated");
+                return Ok(None);
+            }
+            Err(err) => {
+                warn!("Failed to read incoming request: {}", err);
+                return Err(Error::ServerError(format!(
+                    "Failed to accept incoming bi-stream: {err}"
+                )));
+            }
+            Ok(bi_stream) => bi_stream,
+        };
+
+        // Read the request, which must be at most 64KiB.
+        match recv.read_to_end(64 * 1024).await {
+            Ok(req_bytes) => {
+                debug!("Received request...");
+                match parse_jsonrpc_request(req_bytes) {
+                    Ok(jsonrpc_req) => {
+                        debug!("Request parsed successfully");
+                        Ok(Some((jsonrpc_req, JsonRpcResponseStream::new(send))))
                     }
-                    Err(err) => {
-                        warn!("Failed to read incoming request: {}", err);
-                        return Err(Error::ServerError(format!(
-                            "Failed to read incoming request: {err}"
-                        )));
-                    }
-                    Ok(bi_stream) => bi_stream,
-                };
-                // Read the request, which must be at most 64KiB.
-                match recv.read_to_end(64 * 1024).await {
-                    Ok(req_bytes) => {
-                        debug!("Received request...");
-                        match parse_jsonrpc_request(req_bytes) {
-                            Ok(jsonrpc_req) => {
-                                debug!("Request parsed successfully");
-                                Ok(Some((jsonrpc_req, JsonRpcResponseStream::new(send))))
-                            }
-                            Err(err_response) => {
-                                let warning = err_response
-                                    .clone()
-                                    .error
-                                    .ok_or_else(|| {
-                                        Error::ServerError(
-                                            "The response should be populated with an error"
-                                                .to_string(),
-                                        )
-                                    })?
-                                    .message;
-                                warn!("Failed to parse request as JSON-RPC: {}", warning);
-                                Err(Error::JsonRpcRequestParsingError(
-                                    err_response,
-                                    JsonRpcResponseStream::new(send),
-                                ))
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        warn!("Failed to read request: {}", err);
-                        Err(Error::ServerError(format!("Failed to read request: {err}")))
+                    Err(err_response) => {
+                        let warning = err_response
+                            .clone()
+                            .error
+                            .ok_or_else(|| {
+                                Error::ServerError(
+                                    "The response should be populated with an error".to_string(),
+                                )
+                            })?
+                            .message;
+                        warn!("Failed to parse request as JSON-RPC: {}", warning);
+                        Err(Error::JsonRpcRequestParsingError(
+                            err_response,
+                            JsonRpcResponseStream::new(send),
+                        ))
                     }
                 }
             }
+            Err(err) => {
+                warn!("Failed to read request: {}", err);
+                Err(Error::ServerError(format!("Failed to read request: {err}")))
+            }
         }
+        //}
+        //}
     }
 }
 
@@ -191,13 +190,13 @@ impl JsonRpcResponseStream {
     // Write a JsonRpcResponse into the current connection's sending stream
     pub async fn respond(&mut self, response: &JsonRpcResponse) -> Result<()> {
         let serialised_res = serde_json::to_string(response)
-            .map_err(|err| Error::GeneralError(format!("Failed to serialise response: {err:?}")))?;
+            .map_err(|err| Error::ServerError(format!("Failed to serialise response: {err:?}")))?;
 
         self.quinn_send_stream
             .write_all(&serialised_res.into_bytes())
             .await
             .map_err(|err| {
-                Error::GeneralError(format!(
+                Error::ServerError(format!(
                     "Failed to write entire buffer to response stream: {err}"
                 ))
             })
@@ -206,7 +205,7 @@ impl JsonRpcResponseStream {
     // Gracefully finish current connection's stream
     pub async fn finish(&mut self) -> Result<()> {
         self.quinn_send_stream.finish().await.map_err(|err| {
-            Error::GeneralError(format!(
+            Error::ServerError(format!(
                 "Failed to shutdown the response stream gracefully: {err}"
             ))
         })

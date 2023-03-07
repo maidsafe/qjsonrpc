@@ -6,14 +6,12 @@
 // kind, either express or implied. please review the licences for the specific language governing
 // permissions and limitations relating to use of the safe network software.
 
-use qjsonrpc::{
-    ClientEndpoint, Error, JsonRpcResponse, Result, ServerEndpoint, JSONRPC_METHOD_NOT_FOUND,
-};
+use color_eyre::{eyre::eyre, Result};
+use qjsonrpc::{ClientEndpoint, Error, JsonRpcResponse, ServerEndpoint, JSONRPC_METHOD_NOT_FOUND};
 use serde_json::json;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::tempdir;
-use tempfile::TempDir;
-use tracing_subscriber::filter::EnvFilter;
+use tracing_subscriber::EnvFilter;
 use url::Url;
 
 const LISTEN: &str = "https://localhost:33001";
@@ -32,20 +30,22 @@ const TIMEOUT_MS: u64 = 10000;
 /// A self-signed certificate and key are generated and supplied to both client and server.
 #[tokio::main]
 async fn main() -> Result<()> {
+    configure_logging();
     let cert_base_dir = tempdir()?;
-    let (cert_path, key_path) = generate_certificates(&cert_base_dir).await?;
-    configure_logging().await?;
+    let (cert_path, key_path) = generate_certificates(cert_base_dir.path())?;
 
     let qjsonrpc_endpoint = ServerEndpoint::new(cert_path.clone(), key_path, Some(TIMEOUT_MS))?;
+
     let server_task = async move {
         let listen_socket_addr = Url::parse(LISTEN)
-            .map_err(|_| Error::GeneralError("Invalid endpoint address".to_string()))?
+            .map_err(|_| eyre!("Invalid endpoint address"))?
             .socket_addrs(|| None)
-            .map_err(|_| Error::GeneralError("Invalid endpoint address".to_string()))?[0];
+            .map_err(|_| eyre!("Invalid endpoint address"))?[0];
 
         let mut in_conn = qjsonrpc_endpoint
             .bind(&listen_socket_addr)
-            .map_err(|err| Error::GeneralError(format!("Failed to bind endpoint: {err}")))?;
+            .map_err(|err| eyre!("Failed to bind endpoint: {err}"))?;
+
         println!("[server] Bound to address '{}'", &listen_socket_addr);
 
         match in_conn.get_next().await {
@@ -58,7 +58,7 @@ async fn main() -> Result<()> {
                                 println!("[server] Received request: {:?}", &rpc_req);
                                 let resp = match rpc_req.method.as_str() {
                                     METHOD_PING => {
-                                        JsonRpcResponse::result(json!("ack"), rpc_req.id)
+                                        JsonRpcResponse::result(json!("ACK"), rpc_req.id)
                                     }
                                     _ => JsonRpcResponse::error(
                                         format!("Unknown method '{}'", &rpc_req.method),
@@ -104,13 +104,13 @@ async fn main() -> Result<()> {
         let mut out_conn = client.bind()?;
 
         let mut out_jsonrpc_req = out_conn.connect(LISTEN, None).await?;
-        println!("[client] connected to {LISTEN}");
+        println!("[client] Connected to {LISTEN}");
 
-        println!("[client] sending '{METHOD_PING}' method to server...");
+        println!("[client] Sending '{METHOD_PING}' method to server...");
         let resp_result = out_jsonrpc_req
             .send::<String>(METHOD_PING, json!(null))
             .await?;
-        println!("[client] received result '{}' from server.", &resp_result);
+        println!("[client] Received result '{}' from server.", &resp_result);
 
         Ok(())
     };
@@ -118,32 +118,24 @@ async fn main() -> Result<()> {
     tokio::try_join!(client_task, server_task).and_then(|_| Ok(()))
 }
 
-async fn generate_certificates(cert_base_dir: &TempDir) -> Result<(PathBuf, PathBuf)> {
-    let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).map_err(|err| {
-        Error::GeneralError(format!("Failed to generate self-signed certificate: {err}"))
-    })?;
-    let cert_path = cert_base_dir.path().join("cert.der");
-    let key_path = cert_base_dir.path().join("key.der");
+fn generate_certificates(cert_base_dir: &Path) -> Result<(PathBuf, PathBuf)> {
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()])
+        .map_err(|err| eyre!("Failed to generate self-signed certificate: {err}"))?;
+    let cert_path = cert_base_dir.join("cert.der");
+    let key_path = cert_base_dir.join("key.der");
     let key = cert.serialize_private_key_der();
     let cert = cert
         .serialize_der()
-        .map_err(|err| Error::GeneralError(format!("Failed to serialise certificate: {err}")))?;
-    std::fs::write(&cert_path, cert)
-        .map_err(|err| Error::GeneralError(format!("Failed to write certificate: {err}")))?;
-    std::fs::write(&key_path, key)
-        .map_err(|err| Error::GeneralError(format!("Failed to write private key: {err}")))?;
+        .map_err(|err| eyre!("Failed to serialise certificate: {err}"))?;
+    std::fs::write(&cert_path, cert).map_err(|err| eyre!("Failed to write certificate: {err}"))?;
+    std::fs::write(&key_path, key).map_err(|err| eyre!("Failed to write private key: {err}"))?;
     Ok((cert_path, key_path))
 }
 
-async fn configure_logging() -> Result<()> {
-    if let Ok(filter) = std::env::var("RUST_LOG") {
-        let filter = EnvFilter::try_new(filter)
-            .map_err(|_| Error::ClientError("Failed to configure logging".to_string()))?;
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_thread_names(true)
-            .with_ansi(false);
-        tracing_subscriber::fmt::init();
-    };
-    Ok(())
+fn configure_logging() {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_thread_names(true)
+        .with_ansi(false)
+        .init();
 }
