@@ -1,3 +1,5 @@
+## This repo is no longer actively maintained. It has been superceded by use of [protocol buffers] (https://protobuf.dev/)
+
 # JSON-RPC and QUIC
 
 | [MaidSafe website](https://maidsafe.net) | [Safe Dev Forum](https://forum.safedev.org) | [Safe Network Forum](https://safenetforum.org) |
